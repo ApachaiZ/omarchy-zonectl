@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "zonectl",
+  "name": "Per-Screen Zones",
+  "version": "0.1.0",
+  "author": "ApachaiZ",
+  "license": "MIT",
+  "description": "Show or hide the bar and its left, center and right sections, per screen",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Per-Screen Zones",
+    "description": "Bar and left/center/right section visibility per screen",
+    "category": "Layout",
+    "defaultSection": "left",
+    "allowMultiple": false
+  }
+}
