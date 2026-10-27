@@ -1,5 +1,7 @@
 # Per-Screen Zones (`zonectl`)
 
+![Per-Screen Zones — independent bar and zone controls for every display](preview.png)
+
 An Omarchy bar widget that controls, **per screen**, whether the native bar
 is shown and which of its three sections (`left`, `center`, `right`) are
 visible. It does not replace the bar: widgets, panels, theming and layout
