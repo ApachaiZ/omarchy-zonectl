@@ -66,6 +66,13 @@ Panel {
     root.hostWidget.setZone(name, key, !current)
   }
 
+  // Screen names come from the compositor or from user config. Keep them
+  // single-line and bounded before they reach a text sink.
+  function plainLabel(value) {
+    var text = String(value || "").replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, "")
+    return text.length > 128 ? text.slice(0, 128) + "…" : text
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: root.anchorItem
@@ -90,6 +97,7 @@ Panel {
         Text {
           width: parent.width
           text: "Bar and zones per screen"
+          textFormat: Text.PlainText
           color: root.barForeground
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.subtitle
@@ -100,6 +108,7 @@ Panel {
         Text {
           width: parent.width
           text: "Each screen keeps its own settings. The last visible bar cannot be hidden from here; use \"Show all\" to bring everything back."
+          textFormat: Text.PlainText
           color: Commons.Color.muted
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
@@ -117,7 +126,8 @@ Panel {
 
             Text {
               width: parent.width
-              text: row.modelData.name + (row.modelData.connected ? "" : "  (disconnected)")
+              text: root.plainLabel(row.modelData.name) + (row.modelData.connected ? "" : "  (disconnected)")
+              textFormat: Text.PlainText
               color: root.barForeground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.body

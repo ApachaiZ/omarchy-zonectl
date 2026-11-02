@@ -12,7 +12,9 @@ import qs.Ui
 // which panel it lives in through the attached `QsWindow.window` and only
 // ever touches that panel:
 //   - the whole bar is parked off-screen with the same margin +
-//     ExclusionMode.Ignore mechanism the native bar-hidden toggle uses;
+//     ExclusionMode.Ignore mechanism the native bar-hidden toggle uses, but
+//     only while this screen's zone config says `bar: false`; the native
+//     `omarchy toggle bar` keeps owning global hiding;
 //   - the left/center/right sections are hidden without unloading them, so
 //     this widget keeps receiving settings even inside a hidden section.
 // Widgets, layout, theming and popouts stay Omarchy-owned: disabling this
@@ -110,47 +112,12 @@ BarWidget {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
-  // ---- Global bar-hidden flag (native `omarchy toggle bar`) ----------------
-
-  property bool barHidden: false
-
-  FileView {
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/toggles"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: root.syncBarHidden()
-  }
-
-  Process {
-    id: barHiddenProbe
-    running: true
-    command: ["bash", "-c",
-      "[[ -f $HOME/.local/state/omarchy/toggles/bar-off ]] && echo yes || echo no"]
-    stdout: SplitParser {
-      onRead: function(line) {
-        var on = String(line).trim() === "yes"
-        if (on !== root.barHidden) root.barHidden = on
-      }
-    }
-  }
-
-  function syncBarHidden() {
-    barHiddenProbe.running = true
-    reProbeTimer.restart()
-  }
-
-  Timer {
-    id: reProbeTimer
-    // The directory watch can go quiet after rapid flag changes; a periodic
-    // re-probe is this plugin's belt-and-braces version of the native IPC
-    // nudge (barhide documents the same failure mode).
-    interval: 15000
-    onTriggered: barHiddenProbe.running = true
-  }
-
   // ---- Self-parking --------------------------------------------------------
 
-  readonly property bool parked: root.barHidden || !root.zoneConfig.bar
+  // Only this plugin's own per-screen setting parks the bar. The native
+  // `bar-off` flag is left to the native bar so a missed file-watch event can
+  // never leave the plugin overriding the user's global bar toggle.
+  readonly property bool parked: !root.zoneConfig.bar
   readonly property real parkedOffset: root.parked
     ? -Math.max(root.bar && root.bar.barSize > 0 ? root.bar.barSize : 26, 26)
     : 0
@@ -171,8 +138,8 @@ BarWidget {
   Binding {
     target: root.hostWindow
     property: "exclusionMode"
-    value: root.parked ? ExclusionMode.Ignore : ExclusionMode.Auto
-    when: root.hostWindow !== null && "exclusionMode" in root.hostWindow && !root.teardown
+    value: ExclusionMode.Ignore
+    when: root.parked && root.hostWindow !== null && "exclusionMode" in root.hostWindow && !root.teardown
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -180,7 +147,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.top"
     value: root.bar && root.bar.position === "top" ? root.parkedOffset : 0
-    when: root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -188,7 +155,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.bottom"
     value: root.bar && root.bar.position === "bottom" ? root.parkedOffset : 0
-    when: root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -196,7 +163,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.left"
     value: root.bar && root.bar.position === "left" ? root.parkedOffset : 0
-    when: root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -204,7 +171,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.right"
     value: root.bar && root.bar.position === "right" ? root.parkedOffset : 0
-    when: root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -280,10 +247,7 @@ BarWidget {
   onZoneConfigChanged: Qt.callLater(root.applyZones)
   onParkedChanged: Qt.callLater(root.applyZones)
 
-  Component.onCompleted: {
-    root.syncBarHidden()
-    Qt.callLater(root.applyZones)
-  }
+  Component.onCompleted: Qt.callLater(root.applyZones)
 
   // The bar can rebuild its section items (orientation/position changes), so
   // re-scan on a slow timer as a fallback. Re-applying the current state is

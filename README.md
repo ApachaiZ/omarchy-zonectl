@@ -95,9 +95,11 @@ Every bar surface builds one instance of this widget. The instance finds its
 own panel through `QsWindow.window` and only touches that panel:
 
 1. **Whole bar**: `Binding`s on the `PanelWindow`'s `margins.*` and
-   `exclusionMode`, exactly the mechanism the native bar-hidden toggle uses.
-   The native bindings are restored when the widget is destroyed
-   (`Binding.RestoreBindingOrValue`).
+   `exclusionMode`, exactly the mechanism the native bar-hidden toggle uses,
+   but active only while this screen's `bar` zone is false. When the zone is
+   true the bindings are inactive and the native bar owns the panel, so
+   `omarchy toggle bar` keeps working normally. The native bindings are also
+   restored when the widget is destroyed (`Binding.RestoreBindingOrValue`).
 2. **Sections**: the `left`/`center`/`right` sections are found in the bar's
    item tree by their shape markers (`region` for the side sections,
    `entries` + `anchorEntry` for the center). A hidden section is drawn with
@@ -109,8 +111,9 @@ own panel through `QsWindow.window` and only touches that panel:
    restart. The matching `ModuleSlot`s still get `visible: false` so the
    bar's panel navigation and drag targets do not offer hidden widgets. No
    private name from `Bar.qml` is used.
-3. The global `bar-off` toggle is read by the plugin (file + probe), because
-   its margin bindings replace the native bar's own.
+3. The global `bar-off` flag is never read or mirrored: that is native state
+   and stays with the native bar, so a missed file-watch event cannot strand
+   the panel under this plugin's margins.
 
 Disabling the plugin (`omarchy plugin disable zonectl`) destroys the
 instances and restores margins, exclusion and sections: the original bar is
@@ -123,7 +126,11 @@ omarchy plugin remove zonectl
 ```
 
 Removal disables the plugin first, so margins, exclusion and sections are
-restored on every screen before the folder is deleted.
+restored on every screen before the folder is deleted. The only persisted
+state is the widget's inline entry in `~/.config/omarchy/shell.json`, and the
+pre-removal disable removes that entry. The plugin creates no state, cache,
+credential, service, hook or generated-config files, so nothing else survives
+removal.
 
 ## Validation
 
@@ -141,14 +148,15 @@ Both commands exit without an error. The manifest declares
 ## Privacy and security
 
 - **No network and no telemetry.** The plugin makes no HTTP requests, opens
-  no sockets, and collects no analytics.
+  no sockets, and collects no analytics. Screen names are rendered as
+  `Text.PlainText`, so they cannot trigger rich-text image loads.
 - **Local-only state.** The per-screen map lives in
   `~/.config/omarchy/shell.json`; screen names are read from Quickshell and
   stored there only. Nothing leaves the machine.
 - **No elevated privileges.** The plugin never requests elevated rights, runs
   an installer, or downloads anything, and it has no install hooks.
-- **One fixed subprocess.** It runs a single `bash -c` test for the local
-  `bar-off` flag; no user or IPC input is interpolated into the command.
+- **No subprocesses.** The plugin runs no external command and starts no
+  helper process; all bar and section changes go through QML properties.
 - **No secrets or hardware identifiers.** Only the compositor's output names
   are used; no serial numbers, IP addresses, or hardware identifiers are
   read or stored.
