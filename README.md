@@ -79,6 +79,10 @@ omarchy-shell zonectl reset
 
 Accepted `set` values: `true`, `false`, `on`, `off`, `1`.
 
+Changes apply immediately on every screen, including when the edited screen
+is the one whose section (or whole bar) is hidden. No shell restart is needed;
+only editing the plugin's QML requires one.
+
 ## Guard rail
 
 The last screen whose bar is visible cannot be hidden from the plugin or
@@ -96,8 +100,15 @@ own panel through `QsWindow.window` and only touches that panel:
    (`Binding.RestoreBindingOrValue`).
 2. **Sections**: the `left`/`center`/`right` sections are found in the bar's
    item tree by their shape markers (`region` for the side sections,
-   `entries` + `anchorEntry` for the center), and `visible` is applied to
-   every match found. No private name from `Bar.qml` is used.
+   `entries` + `anchorEntry` for the center). A hidden section is drawn with
+   `opacity: 0` and `enabled: false` instead of `visible: false`: the
+   section's `ModuleList` only keeps its widgets loaded while it is visible,
+   so unloading it would also destroy this widget when it lives in that
+   section. Keeping it mounted is what lets a configuration change made on
+   another screen (or through IPC) apply live instead of requiring a shell
+   restart. The matching `ModuleSlot`s still get `visible: false` so the
+   bar's panel navigation and drag targets do not offer hidden widgets. No
+   private name from `Bar.qml` is used.
 3. The global `bar-off` toggle is read by the plugin (file + probe), because
    its margin bindings replace the native bar's own.
 
@@ -149,7 +160,11 @@ Both commands exit without an error. The manifest declares
   zone hiding (the whole-bar control would keep working). After a large
   update, compare with
   `/usr/share/omarchy/shell/plugins/bar/Bar.qml`.
-- `visible=false` on a section does not close a panel that is already open;
-  close the panel before changing that section.
+- A hidden section stays mounted at `opacity: 0`, so its widgets keep
+  running (timers, polls, services) even though nothing is drawn. This is
+  deliberate: it keeps the control instance alive and makes zone changes
+  apply without a shell restart.
+- Hiding a section does not close a panel that is already open; close the
+  panel before changing that section.
 - Settings live in the widget's entry: `omarchy plugin disable` removes it,
   so re-enabling starts again from "everything shown".

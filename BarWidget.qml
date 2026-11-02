@@ -13,8 +13,8 @@ import qs.Ui
 // ever touches that panel:
 //   - the whole bar is parked off-screen with the same margin +
 //     ExclusionMode.Ignore mechanism the native bar-hidden toggle uses;
-//   - the left/center/right sections are hidden by toggling `visible` on the
-//     section items the native bar built inside this panel.
+//   - the left/center/right sections are hidden without unloading them, so
+//     this widget keeps receiving settings even inside a hidden section.
 // Widgets, layout, theming and popouts stay Omarchy-owned: disabling this
 // plugin restores everything.
 //
@@ -34,13 +34,30 @@ BarWidget {
     return (m && typeof m === "object" && !Array.isArray(m)) ? m : ({})
   }
 
+  function isPlainObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value)
+  }
+
+  function copyMap(source) {
+    var out = {}
+    if (!root.isPlainObject(source)) return out
+    for (var key in source)
+      if (Object.prototype.hasOwnProperty.call(source, key)) out[key] = source[key]
+    return out
+  }
+
+  function screenConfig(name) {
+    var cfg = root.screenMap[String(name || "")]
+    return root.isPlainObject(cfg) ? cfg : ({})
+  }
+
   readonly property var hostWindow: QsWindow.window
   readonly property var hostScreen: hostWindow ? hostWindow.screen : null
   readonly property string hostScreenName: hostScreen ? String(hostScreen.name || "") : ""
 
   readonly property var zoneConfig: {
-    var cfg = root.screenMap[root.hostScreenName]
-    function shown(key) { return !cfg || cfg[key] !== false }
+    var cfg = root.screenConfig(root.hostScreenName)
+    function shown(key) { return cfg[key] !== false }
     return {
       bar: shown("bar"),
       left: shown("left"),
@@ -56,24 +73,26 @@ BarWidget {
     for (var i = 0; i < screens.length; i++) {
       var screen = screens[i]
       if (!screen || String(screen.name || "") === String(exceptName || "")) continue
-      var cfg = root.screenMap[String(screen.name || "")]
-      if (!cfg || cfg.bar !== false) return true
+      var cfg = root.screenConfig(String(screen.name || ""))
+      if (cfg.bar !== false) return true
     }
     return false
   }
 
+  readonly property var zoneKeys: ["bar", "left", "center", "right"]
+
   function setZone(screenName, key, value) {
-    var name = String(screenName || "")
-    if (!name) return
-    if (key === "bar" && value === false && !root.otherBarVisible(name)) return
-    var next = {}
-    for (var k in root.screenMap) next[k] = root.screenMap[k]
-    var row = {}
-    var current = next[name] || {}
-    for (var c in current) row[c] = current[c]
-    row[String(key)] = !!value
+    var name = String(screenName || "").trim()
+    var zone = String(key || "")
+    if (!name || name.length > 128 || root.zoneKeys.indexOf(zone) === -1) return false
+    var shown = value === true
+    if (zone === "bar" && !shown && !root.otherBarVisible(name)) return false
+    var next = root.copyMap(root.screenMap)
+    var row = root.copyMap(root.screenConfig(name))
+    row[zone] = shown
     next[name] = row
     root.writeScreens(next)
+    return true
   }
 
   function resetAll() {
@@ -81,12 +100,11 @@ BarWidget {
   }
 
   function writeScreens(screens) {
-    var entry = { id: root.moduleName }
-    var current = root.settings || {}
-    for (var k in current) if (k !== "id") entry[k] = current[k]
+    var entry = root.copyMap(root.settings)
+    entry.id = root.moduleName
     entry.screens = screens
     // Applied locally first so the popup moves on the click itself; the shell
-    // reload that follows lands the same value.
+    // config update that follows lands the same value.
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
@@ -145,9 +163,9 @@ BarWidget {
   Component.onDestruction: {
     root.teardown = true
     var sections = root.scanSections()
-    for (var i = 0; i < sections.left.length; i++) sections.left[i].visible = true
-    for (var c = 0; c < sections.center.length; c++) sections.center[c].visible = true
-    for (var r = 0; r < sections.right.length; r++) sections.right[r].visible = true
+    root.setSectionShown(sections.left, true)
+    root.setSectionShown(sections.center, true)
+    root.setSectionShown(sections.right, true)
   }
 
   Binding {
@@ -196,7 +214,9 @@ BarWidget {
   // items are internal to Bar.qml, but they carry stable shape markers:
   // LeftModules/RightModules declare `region`, CenterModules declares
   // `anchorEntry` alongside `entries`. Matching on those keeps this plugin
-  // off the bar's private object names.
+  // off the bar's private object names. Center matching is restricted to the
+  // outer CenterModules: the inner center ModuleLists also carry `entries`,
+  // and touching their `visible` would mount every center widget twice.
   function scanSections() {
     var out = { left: [], center: [], right: [] }
     var win = root.hostWindow
@@ -216,18 +236,44 @@ BarWidget {
     return out
   }
 
-  property var sectionItems: ({ left: [], center: [], right: [] })
+  // Hide by opacity, not by `visible`. A ModuleList's `active` binding is
+  // `visible && entries.length > 0`, so hiding a section with `visible=false`
+  // deactivates its Loader and destroys the widgets inside it. When this
+  // widget itself lives in the hidden section, that would destroy the very
+  // controller that turns the section back on, and the screen would need a
+  // shell restart before a config change from another screen could apply.
+  // Opacity keeps the section mounted (settings still reach it) while drawing
+  // nothing and taking no input.
+  function setSectionShown(items, shown) {
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i]
+      if (!item) continue
+      // Section containers (ModuleList and CenterModules) declare `entries`;
+      // ModuleSlot delegates do not. Containers have to stay mounted so their
+      // Loader keeps the widgets alive, so opacity draws nothing instead.
+      if (item.entries !== undefined) {
+        // A previous version hid sections with `visible = false`, which also
+        // breaks the section's own binding. Take the section back to mounted
+        // so an in-place plugin reload recovers without a shell restart.
+        if (!item.visible) item.visible = true
+        item.opacity = shown ? 1 : 0
+        item.enabled = shown
+        continue
+      }
+      // A ModuleSlot is a plain Item: `visible` does not unload its widget,
+      // so use it to keep the bar's panel navigation and drag targets from
+      // offering entries the user cannot see.
+      if (item.visible !== shown) item.visible = shown
+      item.enabled = shown
+    }
+  }
 
   function applyZones() {
     var sections = root.scanSections()
-    root.sectionItems = sections
     var zones = root.zoneConfig
-    // Every match is hidden, not just the outermost container: the scan also
-    // finds the per-widget slots inside an expanded section, and leaving one
-    // of those visible would keep drawing it.
-    for (var i = 0; i < sections.left.length; i++) sections.left[i].visible = zones.left
-    for (var c = 0; c < sections.center.length; c++) sections.center[c].visible = zones.center
-    for (var r = 0; r < sections.right.length; r++) sections.right[r].visible = zones.right
+    root.setSectionShown(sections.left, zones.left)
+    root.setSectionShown(sections.center, zones.center)
+    root.setSectionShown(sections.right, zones.right)
   }
 
   onHostWindowChanged: Qt.callLater(root.applyZones)
@@ -240,8 +286,8 @@ BarWidget {
   }
 
   // The bar can rebuild its section items (orientation/position changes), so
-  // re-scan on a slow timer as a fallback. Assigning an unchanged boolean is
-  // a no-op in QML.
+  // re-scan on a slow timer as a fallback. Re-applying the current state is
+  // cheap and also recovers from a rebuild without a config change.
   Timer {
     interval: 2000
     running: true
@@ -316,8 +362,8 @@ BarWidget {
     function reset(): void { root.resetAll() }
 
     function set(screen: string, key: string, value: string): void {
-      root.setZone(screen, key, String(value) === "true"
-        || String(value) === "on" || String(value) === "1")
+      var text = String(value || "").toLowerCase()
+      root.setZone(screen, key, text === "true" || text === "on" || text === "1")
     }
   }
 }

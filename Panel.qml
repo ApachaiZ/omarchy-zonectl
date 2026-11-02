@@ -13,7 +13,7 @@ import qs.Ui
 // PanelKeyCatcher.
 //
 // Every click writes this widget's own shell.json entry through the host
-// widget; the bar reloads and every screen re-applies from the shared config.
+// widget; the shell applies it live on every screen.
 Panel {
   id: root
   moduleName: "zonectl"
@@ -31,7 +31,8 @@ Panel {
   }
 
   function configFor(name, map) {
-    var cfg = map[name] || {}
+    var cfg = map ? map[name] : null
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) cfg = {}
     return {
       bar: cfg.bar !== false,
       left: cfg.left !== false,
