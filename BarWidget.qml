@@ -4,6 +4,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
+import "Zones.js" as Zones
 
 // Per-screen bar control: shows or hides this screen's bar panel and each of
 // its three sections, without replacing the native bar.
@@ -31,78 +32,33 @@ BarWidget {
 
   // ---- Configuration -------------------------------------------------------
 
-  readonly property var screenMap: {
-    var m = root.settings ? root.settings.screens : null
-    return (m && typeof m === "object" && !Array.isArray(m)) ? m : ({})
-  }
-
-  function isPlainObject(value) {
-    return !!value && typeof value === "object" && !Array.isArray(value)
-  }
-
-  function copyMap(source) {
-    var out = {}
-    if (!root.isPlainObject(source)) return out
-    for (var key in source)
-      if (Object.prototype.hasOwnProperty.call(source, key)) out[key] = source[key]
-    return out
-  }
-
-  function screenConfig(name) {
-    var cfg = root.screenMap[String(name || "")]
-    return root.isPlainObject(cfg) ? cfg : ({})
-  }
-
+  readonly property var screenMap: Zones.screenMap(root.settings)
   readonly property var hostWindow: QsWindow.window
   readonly property var hostScreen: hostWindow ? hostWindow.screen : null
   readonly property string hostScreenName: hostScreen ? String(hostScreen.name || "") : ""
-
-  readonly property var zoneConfig: {
-    var cfg = root.screenConfig(root.hostScreenName)
-    function shown(key) { return cfg[key] !== false }
-    return {
-      bar: shown("bar"),
-      left: shown("left"),
-      center: shown("center"),
-      right: shown("right")
-    }
-  }
-
-  // Keep the escape hatch: the last visible bar cannot be hidden from here.
-  // The native `omarchy toggle bar` still hides every bar at once.
-  function otherBarVisible(exceptName) {
-    var screens = Quickshell.screens || []
-    for (var i = 0; i < screens.length; i++) {
-      var screen = screens[i]
-      if (!screen || String(screen.name || "") === String(exceptName || "")) continue
-      var cfg = root.screenConfig(String(screen.name || ""))
-      if (cfg.bar !== false) return true
-    }
-    return false
-  }
-
-  readonly property var zoneKeys: ["bar", "left", "center", "right"]
+  readonly property var zoneConfig: Zones.zoneConfig(root.screenMap, root.hostScreenName)
 
   function setZone(screenName, key, value) {
-    var name = String(screenName || "").trim()
-    var zone = String(key || "")
-    if (!name || name.length > 128 || root.zoneKeys.indexOf(zone) === -1) return false
     var shown = value === true
-    if (zone === "bar" && !shown && !root.otherBarVisible(name)) return false
-    var next = root.copyMap(root.screenMap)
-    var row = root.copyMap(root.screenConfig(name))
-    row[zone] = shown
-    next[name] = row
+    // Keep the escape hatch: the last visible bar cannot be hidden from here.
+    // The native `omarchy toggle bar` still hides every bar at once.
+    if (key === "bar" && !shown
+        && !Zones.otherBarVisible(root.screenMap, screenName, Quickshell.screens)) return false
+    var next = Zones.setZone(root.screenMap, screenName, key, shown)
+    if (next === null) return false
     root.writeScreens(next)
     return true
   }
 
   function resetAll() {
+    // updateEntryInline is idempotent, but skip the write when there is
+    // nothing to reset.
+    if (Object.keys(root.screenMap).length === 0) return
     root.writeScreens({})
   }
 
   function writeScreens(screens) {
-    var entry = root.copyMap(root.settings)
+    var entry = Zones.copyMap(root.settings)
     entry.id = root.moduleName
     entry.screens = screens
     // Applied locally first so the popup moves on the click itself; the shell
@@ -126,6 +82,7 @@ BarWidget {
   // and restore them on teardown, so removing the plugin always brings the
   // bar back.
   property bool teardown: false
+  readonly property bool parkingActive: root.parked && !!root.hostWindow && !root.teardown
 
   Component.onDestruction: {
     root.teardown = true
@@ -139,7 +96,7 @@ BarWidget {
     target: root.hostWindow
     property: "exclusionMode"
     value: ExclusionMode.Ignore
-    when: root.parked && root.hostWindow !== null && "exclusionMode" in root.hostWindow && !root.teardown
+    when: root.parkingActive && "exclusionMode" in root.hostWindow
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -147,7 +104,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.top"
     value: root.bar && root.bar.position === "top" ? root.parkedOffset : 0
-    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parkingActive && "margins" in root.hostWindow
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -155,7 +112,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.bottom"
     value: root.bar && root.bar.position === "bottom" ? root.parkedOffset : 0
-    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parkingActive && "margins" in root.hostWindow
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -163,7 +120,7 @@ BarWidget {
     target: root.hostWindow
     property: "margins.left"
     value: root.bar && root.bar.position === "left" ? root.parkedOffset : 0
-    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parkingActive && "margins" in root.hostWindow
     restoreMode: Binding.RestoreBindingOrValue
   }
 
@@ -171,67 +128,86 @@ BarWidget {
     target: root.hostWindow
     property: "margins.right"
     value: root.bar && root.bar.position === "right" ? root.parkedOffset : 0
-    when: root.parked && root.hostWindow !== null && "margins" in root.hostWindow && !root.teardown
+    when: root.parkingActive && "margins" in root.hostWindow
     restoreMode: Binding.RestoreBindingOrValue
   }
 
   // ---- Section visibility --------------------------------------------------
 
-  // The native bar builds one of each section inside this panel. The section
-  // items are internal to Bar.qml, but they carry stable shape markers:
-  // LeftModules/RightModules declare `region`, CenterModules declares
-  // `anchorEntry` alongside `entries`. Matching on those keeps this plugin
-  // off the bar's private object names. Center matching is restricted to the
-  // outer CenterModules: the inner center ModuleLists also carry `entries`,
-  // and touching their `visible` would mount every center widget twice.
+  // Omarchy 4.5 builds one ModuleList per section: `left`, `right`, and the
+  // center split into `centerBegin`, `center` and `centerEnd`. A ModuleList
+  // carries a `keys` array, while its ModuleSlot delegates and drag spacers
+  // only carry `region`. Matching on the list marker keeps this plugin off
+  // the bar's private object names.
+  function isSectionContainer(item) {
+    return item.keys !== undefined
+  }
+
+  function zoneForRegion(region) {
+    var name = String(region || "")
+    if (name === "left" || name === "right") return name
+    if (name === "center" || name === "centerBegin" || name === "centerEnd") return "center"
+    return ""
+  }
+
+  // Every section's containers (the ModuleLists) and its slots (their direct
+  // children). The walk stops at each container: its slots are right there,
+  // and descending into every widget's subtree made the old fixed node budget
+  // run out before the left section was reached on a full bar.
   function scanSections() {
-    var out = { left: [], center: [], right: [] }
+    var out = {
+      left: { containers: [], slots: [] },
+      center: { containers: [], slots: [] },
+      right: { containers: [], slots: [] }
+    }
     var win = root.hostWindow
     if (!win || !win.contentItem) return out
     var stack = [win.contentItem]
     var guard = 0
-    while (stack.length > 0 && guard < 500) {
+    while (stack.length > 0 && guard < 20000) {
       guard++
       var item = stack.pop()
       if (!item) continue
-      if (item.region === "left") out.left.push(item)
-      else if (item.region === "right") out.right.push(item)
-      else if (item.entries !== undefined && item.anchorEntry !== undefined) out.center.push(item)
+      if (root.isSectionContainer(item)) {
+        var zone = root.zoneForRegion(item.region)
+        if (!zone) continue
+        out[zone].containers.push(item)
+        var slots = item.children
+        if (slots) for (var s = 0; s < slots.length; s++) {
+          var slot = slots[s]
+          if (slot && slot.region !== undefined && root.zoneForRegion(slot.region) === zone)
+            out[zone].slots.push(slot)
+        }
+        continue
+      }
       var kids = item.children
       if (kids) for (var i = 0; i < kids.length; i++) stack.push(kids[i])
     }
     return out
   }
 
-  // Hide by opacity, not by `visible`. A ModuleList's `active` binding is
-  // `visible && entries.length > 0`, so hiding a section with `visible=false`
-  // deactivates its Loader and destroys the widgets inside it. When this
-  // widget itself lives in the hidden section, that would destroy the very
-  // controller that turns the section back on, and the screen would need a
-  // shell restart before a config change from another screen could apply.
-  // Opacity keeps the section mounted (settings still reach it) while drawing
-  // nothing and taking no input.
-  function setSectionShown(items, shown) {
-    for (var i = 0; i < items.length; i++) {
-      var item = items[i]
-      if (!item) continue
-      // Section containers (ModuleList and CenterModules) declare `entries`;
-      // ModuleSlot delegates do not. Containers have to stay mounted so their
-      // Loader keeps the widgets alive, so opacity draws nothing instead.
-      if (item.entries !== undefined) {
-        // A previous version hid sections with `visible = false`, which also
-        // breaks the section's own binding. Take the section back to mounted
-        // so an in-place plugin reload recovers without a shell restart.
-        if (!item.visible) item.visible = true
-        item.opacity = shown ? 1 : 0
-        item.enabled = shown
-        continue
-      }
-      // A ModuleSlot is a plain Item: `visible` does not unload its widget,
-      // so use it to keep the bar's panel navigation and drag targets from
-      // offering entries the user cannot see.
-      if (item.visible !== shown) item.visible = shown
-      item.enabled = shown
+  // Hide by opacity, not by `visible`. A ModuleList binds its own `visible` to
+  // whether it holds any rows, and its Repeater only makes slots while the
+  // list is visible. Hiding the container with `visible=false` would empty
+  // the Repeater and destroy every widget inside, including this controller
+  // when it lives in the hidden section. Opacity keeps the list mounted
+  // (settings still reach it) while drawing nothing and taking no input.
+  //
+  // Slots are plain Items: `visible` does not unload their widget, so it also
+  // keeps the bar's panel navigation and drag targets from offering entries
+  // the user cannot see, and lets the layout reclaim their room.
+  function setSectionShown(section, shown) {
+    for (var c = 0; c < section.containers.length; c++) {
+      var container = section.containers[c]
+      if (!container) continue
+      container.opacity = shown ? 1 : 0
+      container.enabled = shown
+    }
+    for (var i = 0; i < section.slots.length; i++) {
+      var slot = section.slots[i]
+      if (!slot) continue
+      if (slot.visible !== shown) slot.visible = shown
+      slot.enabled = shown
     }
   }
 

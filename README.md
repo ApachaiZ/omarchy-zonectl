@@ -29,10 +29,18 @@ shell and the marketplace validator both reject it.
 
 ## Usage
 
-Click the monitor glyph in the bar to open the panel. It lists the connected
-screens (and configured screens that are currently disconnected), each with
-four buttons: **Bar**, **Left**, **Center**, **Right**. **Show all** resets
-everything. Escape closes the panel.
+Click the monitor glyph in the bar to open the panel. Each connected screen
+(and each configured screen that is currently disconnected) gets a card with
+its name, a connection dot, and a 2×2 grid of **Bar**, **Left**, **Center**
+and **Right** toggles; an active toggle is highlighted. **Show all** resets
+everything.
+
+Keyboard: arrow keys move the cursor between the zone toggles, Enter or Space
+flips the focused zone, and Escape closes the panel; Tab still switches to the
+next bar panel. Mouse hover moves the same cursor.
+
+Cards lift slightly on hover and buttons grow a touch; both effects are
+disabled when the shell's reduced-motion setting is on.
 
 The button lives in the section where the widget is placed. If you hide that
 section on a screen, the button disappears from that screen but remains
@@ -101,15 +109,18 @@ own panel through `QsWindow.window` and only touches that panel:
    `omarchy toggle bar` keeps working normally. The native bindings are also
    restored when the widget is destroyed (`Binding.RestoreBindingOrValue`).
 2. **Sections**: the `left`/`center`/`right` sections are found in the bar's
-   item tree by their shape markers (`region` for the side sections,
-   `entries` + `anchorEntry` for the center). A hidden section is drawn with
-   `opacity: 0` and `enabled: false` instead of `visible: false`: the
-   section's `ModuleList` only keeps its widgets loaded while it is visible,
-   so unloading it would also destroy this widget when it lives in that
-   section. Keeping it mounted is what lets a configuration change made on
-   another screen (or through IPC) apply live instead of requiring a shell
-   restart. The matching `ModuleSlot`s still get `visible: false` so the
-   bar's panel navigation and drag targets do not offer hidden widgets. No
+   item tree by the shape marker every section list carries: a `ModuleList`
+   has a `keys` array and a `region` (`left`, `right`, and since Omarchy 4.5
+   the center is split into `centerBegin`, `center`, `centerEnd`).
+   A hidden section is drawn with `opacity: 0` and `enabled: false` instead
+   of `visible: false`: a `ModuleList` only keeps its Repeater populated
+   while it is visible, so unloading it would also destroy this widget when
+   it lives in that section. Keeping it mounted is what lets a configuration
+   change made on another screen (or through IPC) apply live instead of
+   requiring a shell restart. The matching `ModuleSlot`s still get
+   `visible: false` so the bar's panel navigation and drag targets do not
+   offer hidden widgets and the layout reclaims their room. The walk stops at
+   each `ModuleList` instead of descending into every widget's subtree. No
    private name from `Bar.qml` is used.
 3. The global `bar-off` flag is never read or mirrored: that is native state
    and stays with the native bar, so a missed file-watch event cannot strand
@@ -161,13 +172,24 @@ Both commands exit without an error. The manifest declares
   are used; no serial numbers, IP addresses, or hardware identifiers are
   read or stored.
 
+### GDPR
+
+The plugin is a local desktop widget, not a service. It collects no personal
+data, has no analytics and no network access, and stores nothing outside the
+user's own `~/.config/omarchy/shell.json`. Screen output names are technical
+identifiers read from the compositor and written only to that local file;
+they are never transmitted to the plugin author or to any third party. There
+is no profiling and no data controller/processor relationship. Removing the
+plugin, or using **Show all**, removes the only persisted state.
+
 ## Known limits
 
-- Section hiding relies on `Bar.qml`'s internal shape markers (`region`,
-  `entries`, `anchorEntry`). An Omarchy update that renames them would break
-  zone hiding (the whole-bar control would keep working). After a large
-  update, compare with
-  `/usr/share/omarchy/shell/plugins/bar/Bar.qml`.
+- Section hiding relies on `Bar.qml`'s internal shape markers (a section
+  list's `keys` array and its `region`). An Omarchy update that renames them
+  would break zone hiding (the whole-bar control would keep working). After
+  a large update, compare with
+  `/usr/share/omarchy/shell/plugins/bar/Bar.qml`. This version targets
+  Omarchy 4.5's bar structure.
 - A hidden section stays mounted at `opacity: 0`, so its widgets keep
   running (timers, polls, services) even though nothing is drawn. This is
   deliberate: it keeps the control instance alive and makes zone changes
